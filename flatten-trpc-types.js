@@ -58,7 +58,6 @@ const safeTypes = [
 ];
 const fuzzySafeTypes = [
     { typeName: 'ILayer' },
-    { typeName: 'Promise<' },
     { typeName: 'ProcedureOptions' },
     { typeName: 'Response<' },
     { typeName: 'PromiseLike<' },
@@ -70,6 +69,9 @@ function flattenType(type, sourceFile, seenTypes = new Map()) {
         ts_morph_1.TypeFormatFlags.WriteTypeArgumentsOfSignature |
         ts_morph_1.TypeFormatFlags.OmitParameterModifiers |
         ts_morph_1.TypeFormatFlags.UseFullyQualifiedType);
+    /*  if (typeText.includes('AffordacareGroupStage')) {
+      debugger;
+    }*/
     // if its Date, just emit Date, dont introspect
     if (safeTypes.find((t) => t.typeName === typeText)) {
         return typeText;
@@ -86,10 +88,23 @@ function flattenType(type, sourceFile, seenTypes = new Map()) {
             return seenTypes.get(typeText);
         }
         else {
+            // todo support writing recursive type, return out a placeholder and then write that placeholder out
+            return 'any';
             console.log('seen:', typeText);
         }
     }
     seenTypes.set(typeText, '');
+    if (typeText.startsWith('Promise<')) {
+        debugger;
+        let result = `Promise<${flattenType(type.getTypeArguments()[0], sourceFile, seenTypes)}>`;
+        seenTypes.set(typeText, result);
+        return result;
+    }
+    if (typeText.startsWith('PromiseLike<')) {
+        let result = `PromiseLike<${flattenType(type.getTypeArguments()[0], sourceFile, seenTypes)}>`;
+        seenTypes.set(typeText, result);
+        return result;
+    }
     if (type.isUnion()) {
         let result = type
             .getUnionTypes()
@@ -134,7 +149,6 @@ function flattenType(type, sourceFile, seenTypes = new Map()) {
                     // if its spread param, include it
                     function isRestParameter(param) {
                         var _a;
-                        debugger;
                         let a = param.getFlags() & ts_morph_1.SymbolFlags.FunctionScopedVariable;
                         let b = param.getDeclarations().length === 1;
                         let c = ts_morph_1.Node.isParameterDeclaration(param.getDeclarations()[0]);

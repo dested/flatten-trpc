@@ -26,7 +26,6 @@ const safeTypes = [
 
 const fuzzySafeTypes = [
   {typeName: 'ILayer'},
-  {typeName: 'Promise<'},
   {typeName: 'ProcedureOptions'},
   {typeName: 'Response<'},
   {typeName: 'PromiseLike<'},
@@ -42,10 +41,16 @@ function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, 
       TypeFormatFlags.OmitParameterModifiers |
       TypeFormatFlags.UseFullyQualifiedType
   );
+
+  /*  if (typeText.includes('AffordacareGroupStage')) {
+    debugger;
+  }*/
+
   // if its Date, just emit Date, dont introspect
   if (safeTypes.find((t) => t.typeName === typeText)) {
     return typeText;
   }
+
   if (fuzzySafeTypes.find((t) => typeText.startsWith(t.typeName))) {
     if (typeText.includes('ProcedureOptions')) {
       return 'ProcedureOptions';
@@ -59,10 +64,24 @@ function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, 
     if (seenTypes.get(typeText) !== '') {
       return seenTypes.get(typeText)!;
     } else {
-      console.log('seen:', typeText);
+      // todo support writing recursive type, return out a placeholder and then write that placeholder out
+      console.log('recursive', typeText);
+      return 'any';
     }
   }
   seenTypes.set(typeText, '');
+
+  if (typeText.startsWith('Promise<')) {
+    debugger;
+    let result = `Promise<${flattenType(type.getTypeArguments()[0], sourceFile, seenTypes)}>`;
+    seenTypes.set(typeText, result);
+    return result;
+  }
+  if (typeText.startsWith('PromiseLike<')) {
+    let result = `PromiseLike<${flattenType(type.getTypeArguments()[0], sourceFile, seenTypes)}>`;
+    seenTypes.set(typeText, result);
+    return result;
+  }
 
   if (type.isUnion()) {
     let result = type
@@ -110,11 +129,10 @@ function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, 
               const value = flattenType(paramType, sourceFile, seenTypes);
               // if its spread param, include it
               function isRestParameter(param: Symbol) {
-                debugger;
                 let a = param.getFlags() & SymbolFlags.FunctionScopedVariable;
                 let b = param.getDeclarations().length === 1;
                 let c = Node.isParameterDeclaration(param.getDeclarations()[0]);
-                const d = param.getDeclarations()[0].compilerNode?.dotDotDotToken !== undefined;
+                const d = (param.getDeclarations()[0].compilerNode as any)?.dotDotDotToken !== undefined;
                 return a && b && c && d;
               }
               if (isRestParameter(param)) {
