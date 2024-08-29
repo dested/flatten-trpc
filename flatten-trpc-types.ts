@@ -1,4 +1,4 @@
-import {Project, SourceFile, Node, Type, TypeFormatFlags} from 'ts-morph';
+import {Project, Symbol, SourceFile, Node, Type, TypeFormatFlags, SymbolFlags} from 'ts-morph';
 import * as fs from 'node:fs';
 
 const safeTypes = [
@@ -9,6 +9,10 @@ const safeTypes = [
   {typeName: 'bigint'},
   {typeName: 'symbol'},
   {typeName: 'undefined'},
+  {typeName: 'Event'},
+  {typeName: 'EventTarget'},
+  {typeName: 'EventListener'},
+  {typeName: 'AbortSignal'},
   {typeName: 'null'},
   {typeName: 'void'},
   {typeName: 'never'},
@@ -20,26 +24,39 @@ const safeTypes = [
   {typeName: 'ArrayBufferView'},
 ];
 
-function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, string> = new Map()): string {
-  const typeText = type.getText(undefined /* , TypeFormatFlags.NoTypeQuotes */);
+const fuzzySafeTypes = [
+  {typeName: 'ILayer'},
+  {typeName: 'Promise<'},
+  {typeName: 'ProcedureOptions'},
+  {typeName: 'Response<'},
+  {typeName: 'PromiseLike<'},
+];
 
+function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, string> = new Map()): string {
+  const typeText = type.getText(
+    undefined,
+    TypeFormatFlags.NoTruncation |
+      TypeFormatFlags.UseTypeOfFunction |
+      TypeFormatFlags.UseAliasDefinedOutsideCurrentScope |
+      TypeFormatFlags.WriteTypeArgumentsOfSignature |
+      TypeFormatFlags.OmitParameterModifiers |
+      TypeFormatFlags.UseFullyQualifiedType
+  );
   // if its Date, just emit Date, dont introspect
   if (safeTypes.find((t) => t.typeName === typeText)) {
     return typeText;
   }
-
-  if (typeText.endsWith('ILayer')) {
-    return 'any';
-  }
-  if (typeText.includes('Response<')) {
-    return 'any';
+  if (fuzzySafeTypes.find((t) => typeText.startsWith(t.typeName))) {
+    if (typeText.includes('ProcedureOptions')) {
+      return 'ProcedureOptions';
+    }
+    return typeText;
   }
 
   // console.log('typeText:', typeText);
 
   if (seenTypes.has(typeText)) {
     if (seenTypes.get(typeText) !== '') {
-      debugger;
       return seenTypes.get(typeText)!;
     } else {
       console.log('seen:', typeText);
@@ -66,6 +83,12 @@ function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, 
     seenTypes.set(typeText, result);
     return result;
   }
+  if (type.getText().startsWith('[')) {
+    const tupleTypes = type.getTypeArguments();
+    let result = `[${tupleTypes.map((t) => flattenType(t, sourceFile, seenTypes)).join(', ')}]`;
+    seenTypes.set(typeText, result);
+    return result;
+  }
 
   if (type.isArray()) {
     let result = `Array<${flattenType(type.getArrayElementType()!, sourceFile, seenTypes)}>`;
@@ -74,26 +97,51 @@ function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, 
   }
 
   if (type.isObject()) {
-    const properties = type.getProperties();
-    if (properties.length === 0) return '{}';
+    if (type.getCallSignatures().length > 0) {
+      // Handle function types
+      const signatures = type.getCallSignatures();
+      let result = signatures
+        .map((sig) => {
+          const params = sig
+            .getParameters()
+            .map((param) => {
+              const paramType = param.getTypeAtLocation(sourceFile);
+              const name = param.getName();
+              const value = flattenType(paramType, sourceFile, seenTypes);
+              // if its spread param, include it
+              function isRestParameter(param: Symbol) {
+                debugger;
+                let a = param.getFlags() & SymbolFlags.FunctionScopedVariable;
+                let b = param.getDeclarations().length === 1;
+                let c = Node.isParameterDeclaration(param.getDeclarations()[0]);
+                const d = param.getDeclarations()[0].compilerNode?.dotDotDotToken !== undefined;
+                return a && b && c && d;
+              }
+              if (isRestParameter(param)) {
+                return `...${name}: ${value}`;
+              }
+              return `${name}: ${value}`;
+            })
+            .join(', ');
+          const returnType = flattenType(sig.getReturnType(), sourceFile, seenTypes);
+          return `(${params}) => ${returnType}`;
+        })
+        .join(' & ');
+      seenTypes.set(typeText, result);
+      return result;
+    } else {
+      const properties = type.getProperties();
+      if (properties.length === 0) return '{}';
 
-    const members = properties.map((prop) => {
-      const propType = prop.getTypeAtLocation(sourceFile);
-      if ('accepted' === prop.getName()) {
-        // debugger;
-      }
-      if (prop.getName() === '_def') {
-        // return '_def: any';
-      }
-      if (prop.getName() === 'secure') {
-        debugger;
-      }
-      return `"${prop.getName()}": ${flattenType(propType, sourceFile, seenTypes)}`;
-    });
+      const members = properties.map((prop) => {
+        const propType = prop.getTypeAtLocation(sourceFile);
+        return `"${prop.getName()}": ${flattenType(propType, sourceFile, seenTypes)}`;
+      });
 
-    let result = `{ ${members.join('; ')} }`;
-    seenTypes.set(typeText, result);
-    return result;
+      let result = `{ ${members.join('; ')} }`;
+      seenTypes.set(typeText, result);
+      return result;
+    }
   }
 
   if (type.isLiteral()) {
@@ -120,13 +168,14 @@ function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, 
   return typeText;
 }
 
-function generateFlattenedTypes(configPath: string, routerPath: string, outputPath: string) {
+async function generateFlattenedTypes(configPath: string, routerPath: string, outputPath: string) {
   const project = new Project({
     tsConfigFilePath: configPath,
   });
 
   const sourceFile = project.addSourceFileAtPath(routerPath);
-  const appRouterVar = sourceFile.getVariableDeclaration('appRouter');
+  debugger;
+  const appRouterVar = sourceFile.getVariableDeclaration('api');
 
   if (!appRouterVar) {
     throw new Error('Could not find appRouter in the specified file');
@@ -139,7 +188,7 @@ function generateFlattenedTypes(configPath: string, routerPath: string, outputPa
 
   console.log('done flattening');
   // console.log(flattenedType);
-  fs.writeFileSync(outputPath, 'type AppRouter =' + flattenedType);
+  fs.writeFileSync(outputPath, await runPrettier('type API =' + flattenedType));
   /*
   const outputFile = project.createSourceFile(outputPath, '', { overwrite: true });
   outputFile.addTypeAlias({
@@ -153,6 +202,18 @@ function generateFlattenedTypes(configPath: string, routerPath: string, outputPa
 */
   console.log(`Flattened types written to: ${outputPath}`);
 }
+async function runPrettier(code: string) {
+  const {format} = await import('prettier');
+  return format(code, {
+    parser: 'typescript',
+    tabWidth: 2,
+    singleQuote: true,
+    printWidth: 120,
+    bracketSpacing: false,
+    trailingComma: 'es5',
+    endOfLine: 'auto',
+  });
+}
 
 // Usage
 const configPath = process.argv[2];
@@ -164,4 +225,12 @@ if (!configPath || !routerPath || !outputPath) {
   process.exit(1);
 }
 
-generateFlattenedTypes(configPath, routerPath, outputPath);
+generateFlattenedTypes(configPath, routerPath, outputPath)
+  .then(() => {
+    console.log('done');
+    process.exit(1);
+  })
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
