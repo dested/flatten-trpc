@@ -1,0 +1,20 @@
+{
+  "name": "trpc-flatten",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc ",
+    "start1": " node flatten-trpc-types.js ./tsconfig.json C:\\code\\quickgame2\\studio-api\\trpc\\appRouter.ts ./ignore/flattened-types.ts",
+    "start": " node flatten-trpc-types.js ./tsconfig.json C:\\code\\memoizer\\api\\src\\trpc\\appRouter.ts ./ignore/flattened-types.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/node": "^22.5.1",
+    "ts-morph": "23.0.0",
+    "typescript": "^5.5.4",
+    "prettier": "^3.3.3"
+  }
+}
