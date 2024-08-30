@@ -1,6 +1,9 @@
 import {Project, Symbol, SourceFile, Node, Type, TypeFormatFlags, SymbolFlags} from 'ts-morph';
 import * as fs from 'node:fs';
 
+const MAX_REUSE_COUNT = 2;
+const MIN_LENGTH_FOR_REUSE = 150;
+
 const passThroughTypes = [
   'any',
   'Date',
@@ -206,13 +209,16 @@ function flattenType(
   return typeName;
 }
 
+let nextId = 10000000;
 function generateTypeName(typeText: string): string {
   // Generate a name based on the type content
   const simplifiedText = typeText.replace(/[^a-zA-Z0-9]/g, '');
-  if (simplifiedText.startsWith('titlestringmcvId')) {
-    debugger;
+
+  let name = `$$$T${simplifiedText.slice(0, 20)}${(nextId++).toString(36).substr(2, 5)}$$$`;
+  if (name === '$$$TfirstNamestringlastNc3e$$$') {
+    // debugger;
   }
-  return `$$$T${simplifiedText.slice(0, 20)}${Math.random().toString(36).substr(2, 5)}$$$`;
+  return name;
 }
 
 function isRestParameter(param: Symbol) {
@@ -250,23 +256,31 @@ async function generateFlattenedTypes(configPath: string, routerPath: string, ou
     body: v.body,
     count: v.count,
     recursive: v.recursive,
+    originalLength: v.originalText.length,
   }));
 
+  debugger;
   // update all the type references
-  // for (let i = 0; i < 5; i++) {
+
   for (const item of replacementMap) {
-    item.body = efficientStringReplacement(item.body, replacementMap);
+    while (item.body.includes('$$$')) {
+      // debugger;
+      // console.log(item.body.slice(item.body.indexOf('$$$'), item.body.indexOf('$$$') + 200));
+      item.body = efficientStringReplacement(item.body, replacementMap);
+    }
   }
-  // }
 
   flattenedType = efficientStringReplacement(flattenedType, replacementMap);
   console.log('post');
 
   let output = '';
-  for (const item of replacementMap /*.filter((e) => e.count > 2 || e.recursive)*/) {
-    output += `type ${item.name} = ${item.body};\n\n`;
+  debugger;
+  for (const item of replacementMap) {
+    if (item.recursive || (item.count > MAX_REUSE_COUNT && item.originalLength > MIN_LENGTH_FOR_REUSE)) {
+      output += `type ${item.name.replace(/\$\$\$/g, '')} = ${item.body};\n\n`;
+    }
   }
-  output += `type API1 = ${flattenedType};`;
+  output += `export type API = ${flattenedType};`;
 
   console.log('done flattening');
   // console.log(flattenedType);
@@ -299,6 +313,7 @@ interface ReplacementMap {
   body: string;
   count: number;
   recursive: boolean;
+  originalLength: number;
 }
 function efficientStringReplacement(input: string, replacementMap: ReplacementMap[]): string {
   const regex = /\$\$\$(\w+)\$\$\$/g;
@@ -326,9 +341,16 @@ function efficientStringReplacement(input: string, replacementMap: ReplacementMa
     let replacementMapElement = replacementMap.find((e) => e.name === '$$$' + replacement.name + '$$$');
     if (replacementMapElement) {
       if (replacementMapElement.recursive) {
-        continue;
+        chars.splice(replacement.start, replacement.end - replacement.start, replacement.name);
+      } else if (replacementMapElement.count <= MAX_REUSE_COUNT) {
+        chars.splice(replacement.start, replacement.end - replacement.start, replacementMapElement.body);
+      } else {
+        if (replacementMapElement.originalLength <= MIN_LENGTH_FOR_REUSE) {
+          chars.splice(replacement.start, replacement.end - replacement.start, replacementMapElement.body);
+        } else {
+          chars.splice(replacement.start, replacement.end - replacement.start, replacement.name);
+        }
       }
-      chars.splice(replacement.start, replacement.end - replacement.start, replacementMapElement.body);
     }
   }
   // Join the characters back into a string
