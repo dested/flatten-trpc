@@ -5,9 +5,9 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc ",
-    "start1": " node flatten-trpc-types.js ./tsconfig.json C:\\code\\quickgame2\\studio-api\\trpc\\appRouter.ts ./ignore/flattened-types.ts",
-    "start2": " node flatten-trpc-types.js ./tsconfig.json C:\\code\\CleverBenefits\\api\\src\\trpc.ts ./ignore/flattened-types.ts",
-    "start": " node flatten-trpc-types.js ./tsconfig.json C:\\code\\memoizer\\api\\src\\trpc\\appRouter.ts ./ignore/flattened-types.ts"
+    "start1": " ts-node flatten-trpc-types.ts ./tsconfig.json C:\\code\\quickgame2\\studio-api\\trpc\\appRouter.ts ./ignore/flattened-types.ts",
+    "start2": " ts-node flatten-trpc-types.ts ./tsconfig.json C:\\code\\CleverBenefits\\api\\src\\trpc.ts ./ignore/flattened-types.ts",
+    "start": " ts-node flatten-trpc-types.ts ./tsconfig.json C:\\code\\memoizer\\api\\src\\trpc\\appRouter.ts ./ignore/flattened-types.ts"
   },
   "keywords": [],
   "author": "",

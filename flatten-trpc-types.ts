@@ -1,37 +1,44 @@
 import {Project, Symbol, SourceFile, Node, Type, TypeFormatFlags, SymbolFlags} from 'ts-morph';
 import * as fs from 'node:fs';
 
-const safeTypes = [
-  {typeName: 'Date'},
-  {typeName: 'boolean'},
-  {typeName: 'string'},
-  {typeName: 'number'},
-  {typeName: 'bigint'},
-  {typeName: 'symbol'},
-  {typeName: 'undefined'},
-  {typeName: 'Event'},
-  {typeName: 'EventTarget'},
-  {typeName: 'EventListener'},
-  {typeName: 'AbortSignal'},
-  {typeName: 'null'},
-  {typeName: 'void'},
-  {typeName: 'never'},
-  {typeName: 'unknown'},
-  {typeName: 'any'},
-  {typeName: 'object'},
-  {typeName: 'SharedArrayBuffer'},
-  {typeName: 'ArrayBuffer'},
-  {typeName: 'ArrayBufferView'},
+const passThroughTypes = [
+  'any',
+  'Date',
+  'boolean',
+  'string',
+  'number',
+  'bigint',
+  'symbol',
+  'undefined',
+  'Event',
+  'EventTarget',
+  'EventListener',
+  'AbortSignal',
+  'null',
+  'void',
+  'never',
+  'unknown',
+  'any',
+  'object',
+  'SharedArrayBuffer',
+  'ArrayBuffer',
+  'ArrayBufferView',
 ];
 
-const fuzzySafeTypes = [
-  {typeName: 'ILayer'},
-  {typeName: 'ProcedureOptions'},
-  {typeName: 'Response<'},
-  {typeName: 'PromiseLike<'},
-];
+const hardcodedTypes = ['ProcedureOptions'];
 
-function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, string> = new Map()): string {
+function flattenType(
+  type: Type,
+  sourceFile: SourceFile,
+  seenTypes: Map<
+    string,
+    {count: number; name: string; body: string; recursive: boolean; originalText: string}
+  > = new Map()
+): string {
+  if (!type) {
+    console.log('type invalid');
+    return 'unknown';
+  }
   const typeText = type.getText(
     undefined,
     TypeFormatFlags.NoTruncation |
@@ -42,16 +49,11 @@ function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, 
       TypeFormatFlags.UseFullyQualifiedType
   );
 
-  /*  if (typeText.includes('AffordacareGroupStage')) {
-    debugger;
-  }*/
-
-  // if its Date, just emit Date, dont introspect
-  if (safeTypes.find((t) => t.typeName === typeText)) {
+  if (passThroughTypes.find((t) => t === typeText)) {
     return typeText;
   }
 
-  if (fuzzySafeTypes.find((t) => typeText.startsWith(t.typeName))) {
+  if (hardcodedTypes.find((t) => typeText.startsWith(t))) {
     if (typeText.includes('ProcedureOptions')) {
       return 'ProcedureOptions';
     }
@@ -61,36 +63,49 @@ function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, 
   // console.log('typeText:', typeText);
 
   if (seenTypes.has(typeText)) {
-    if (seenTypes.get(typeText) !== '') {
-      return seenTypes.get(typeText)!;
-    } else {
-      // todo support writing recursive type, return out a placeholder and then write that placeholder out
-      console.log('recursive', typeText);
-      return 'any';
+    let v = seenTypes.get(typeText)!;
+    v.count++;
+    if (v.body === '') {
+      v.recursive = true;
     }
+    return v.name;
   }
-  seenTypes.set(typeText, '');
 
-  if (typeText.startsWith('Promise<')) {
-    debugger;
+  const realName = type.getSymbol()?.getName();
+  const aliasName = type.getAliasSymbol()?.getName();
+
+  if (realName === 'Record' || aliasName === 'Record') {
+    if (!type.getTypeArguments()[0] || !type.getTypeArguments()[1]) {
+      return typeText;
+    }
+    let result = `Record<${flattenType(type.getTypeArguments()[0], sourceFile, seenTypes)}, ${flattenType(type.getTypeArguments()[1], sourceFile, seenTypes)}>`;
+    return result;
+  }
+
+  if (realName === 'Promise') {
     let result = `Promise<${flattenType(type.getTypeArguments()[0], sourceFile, seenTypes)}>`;
-    seenTypes.set(typeText, result);
     return result;
   }
-  if (typeText.startsWith('PromiseLike<')) {
+  if (realName === 'PromiseLike') {
     let result = `PromiseLike<${flattenType(type.getTypeArguments()[0], sourceFile, seenTypes)}>`;
-    seenTypes.set(typeText, result);
     return result;
   }
-
+  let typeName = generateTypeName(typeText);
+  seenTypes.set(typeText, {
+    count: 1,
+    name: typeName,
+    body: '',
+    recursive: false,
+    originalText: typeText,
+  });
   if (type.isUnion()) {
     let result = type
       .getUnionTypes()
       .map((t) => flattenType(t, sourceFile, seenTypes))
       .filter((t) => t)
       .join(' | ');
-    seenTypes.set(typeText, result);
-    return result;
+    seenTypes.get(typeText)!.body = result;
+    return typeName;
   }
 
   if (type.isIntersection()) {
@@ -99,23 +114,33 @@ function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, 
       .map((t) => flattenType(t, sourceFile, seenTypes))
       .filter((t) => t)
       .join(' & ');
-    seenTypes.set(typeText, result);
-    return result;
+    seenTypes.get(typeText)!.body = result;
+
+    return typeName;
   }
   if (type.getText().startsWith('[')) {
     const tupleTypes = type.getTypeArguments();
     let result = `[${tupleTypes.map((t) => flattenType(t, sourceFile, seenTypes)).join(', ')}]`;
-    seenTypes.set(typeText, result);
-    return result;
+    seenTypes.get(typeText)!.body = result;
+
+    return typeName;
   }
 
   if (type.isArray()) {
     let result = `Array<${flattenType(type.getArrayElementType()!, sourceFile, seenTypes)}>`;
-    seenTypes.set(typeText, result);
+    seenTypes.get(typeText)!.body = result;
     return result;
   }
 
   if (type.isObject()) {
+    // test if its a {[key:string]: thing}
+    const indexType = type.getStringIndexType();
+    if (indexType) {
+      let result = `{[key: string]: ${flattenType(indexType, sourceFile, seenTypes)}}`;
+      seenTypes.get(typeText)!.body = result;
+      return typeName;
+    }
+
     if (type.getCallSignatures().length > 0) {
       // Handle function types
       const signatures = type.getCallSignatures();
@@ -127,14 +152,6 @@ function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, 
               const paramType = param.getTypeAtLocation(sourceFile);
               const name = param.getName();
               const value = flattenType(paramType, sourceFile, seenTypes);
-              // if its spread param, include it
-              function isRestParameter(param: Symbol) {
-                let a = param.getFlags() & SymbolFlags.FunctionScopedVariable;
-                let b = param.getDeclarations().length === 1;
-                let c = Node.isParameterDeclaration(param.getDeclarations()[0]);
-                const d = (param.getDeclarations()[0].compilerNode as any)?.dotDotDotToken !== undefined;
-                return a && b && c && d;
-              }
               if (isRestParameter(param)) {
                 return `...${name}: ${value}`;
               }
@@ -145,27 +162,29 @@ function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, 
           return `(${params}) => ${returnType}`;
         })
         .join(' & ');
-      seenTypes.set(typeText, result);
-      return result;
+      seenTypes.get(typeText)!.body = result;
+
+      return typeName;
     } else {
       const properties = type.getProperties();
-      if (properties.length === 0) return '{}';
 
       const members = properties.map((prop) => {
         const propType = prop.getTypeAtLocation(sourceFile);
-        return `"${prop.getName()}": ${flattenType(propType, sourceFile, seenTypes)}`;
+        let v = flattenType(propType, sourceFile, seenTypes);
+        return `"${prop.getName()}": ${v}`;
       });
 
       let result = `{ ${members.join('; ')} }`;
-      seenTypes.set(typeText, result);
-      return result;
+      seenTypes.get(typeText)!.body = result;
+      return typeName;
     }
   }
 
   if (type.isLiteral()) {
-    let result = JSON.stringify(type.getLiteralValue());
-    seenTypes.set(typeText, result);
-    return result;
+    let result = type.getText();
+    seenTypes.get(typeText)!.body = result;
+
+    return typeName;
   }
 
   const symbol = type.getSymbol();
@@ -175,15 +194,33 @@ function flattenType(type: Type, sourceFile: SourceFile, seenTypes: Map<string, 
       if (Node.isTypeAliasDeclaration(declaration) || Node.isInterfaceDeclaration(declaration)) {
         const aliasType = declaration.getType();
         let result = flattenType(aliasType, sourceFile, seenTypes);
-        seenTypes.set(typeText, result);
-        return result;
+        seenTypes.get(typeText)!.body = result;
+
+        return typeName;
       }
     }
   }
 
-  seenTypes.set(typeText, typeText);
-  // For other types, return the text representation
-  return typeText;
+  seenTypes.get(typeText)!.body = typeText;
+
+  return typeName;
+}
+
+function generateTypeName(typeText: string): string {
+  // Generate a name based on the type content
+  const simplifiedText = typeText.replace(/[^a-zA-Z0-9]/g, '');
+  if (simplifiedText.startsWith('titlestringmcvId')) {
+    debugger;
+  }
+  return `$$$T${simplifiedText.slice(0, 20)}${Math.random().toString(36).substr(2, 5)}$$$`;
+}
+
+function isRestParameter(param: Symbol) {
+  let a = param.getFlags() & SymbolFlags.FunctionScopedVariable;
+  let b = param.getDeclarations().length === 1;
+  let c = Node.isParameterDeclaration(param.getDeclarations()[0]);
+  const d = (param.getDeclarations()[0].compilerNode as any)?.dotDotDotToken !== undefined;
+  return a && b && c && d;
 }
 
 async function generateFlattenedTypes(configPath: string, routerPath: string, outputPath: string) {
@@ -192,7 +229,6 @@ async function generateFlattenedTypes(configPath: string, routerPath: string, ou
   });
 
   const sourceFile = project.addSourceFileAtPath(routerPath);
-  debugger;
   const appRouterVar = sourceFile.getVariableDeclaration('api');
 
   if (!appRouterVar) {
@@ -200,13 +236,44 @@ async function generateFlattenedTypes(configPath: string, routerPath: string, ou
   }
 
   const appRouterType = appRouterVar.getType();
-  const types = new Map<string, string>();
-  const flattenedType = flattenType(appRouterType, sourceFile, types);
-  fs.writeFileSync('./ignore/types.txt', Array.from(types).join('\n\n\n'));
+  const types = new Map<
+    string,
+    {recursive: boolean; count: number; name: string; body: string; originalText: string}
+  >();
+  let flattenedType = flattenType(appRouterType, sourceFile, types);
+  // fs.writeFileSync('./ignore/types.txt', Array.from(types).join('\n\n\n'));
+  debugger;
+  console.log(types.size);
+  console.log('pre');
+  let replacementMap = Array.from(types.values()).map((v) => ({
+    name: v.name,
+    body: v.body,
+    count: v.count,
+    recursive: v.recursive,
+  }));
+
+  // update all the type references
+  // for (let i = 0; i < 5; i++) {
+  for (const item of replacementMap) {
+    item.body = efficientStringReplacement(item.body, replacementMap);
+  }
+  // }
+
+  flattenedType = efficientStringReplacement(flattenedType, replacementMap);
+  console.log('post');
+
+  let output = '';
+  for (const item of replacementMap /*.filter((e) => e.count > 2 || e.recursive)*/) {
+    output += `type ${item.name} = ${item.body};\n\n`;
+  }
+  output += `type API1 = ${flattenedType};`;
 
   console.log('done flattening');
   // console.log(flattenedType);
-  fs.writeFileSync(outputPath, await runPrettier('type API =' + flattenedType));
+  fs.writeFileSync(outputPath, output);
+  console.log('write non pretty');
+  fs.writeFileSync(outputPath, await runPrettier(output));
+  console.log('write pretty');
   /*
   const outputFile = project.createSourceFile(outputPath, '', { overwrite: true });
   outputFile.addTypeAlias({
@@ -220,6 +287,54 @@ async function generateFlattenedTypes(configPath: string, routerPath: string, ou
 */
   console.log(`Flattened types written to: ${outputPath}`);
 }
+
+interface Replacement {
+  start: number;
+  end: number;
+  name: string;
+}
+
+interface ReplacementMap {
+  name: string;
+  body: string;
+  count: number;
+  recursive: boolean;
+}
+function efficientStringReplacement(input: string, replacementMap: ReplacementMap[]): string {
+  const regex = /\$\$\$(\w+)\$\$\$/g;
+  const replacements: Replacement[] = [];
+  let match;
+
+  while ((match = regex.exec(input)) !== null) {
+    replacements.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      name: match[1],
+    });
+  }
+  // Sort replacements in descending order of their start index
+  replacements.sort((a, b) => b.start - a.start);
+
+  if (!input) {
+    debugger;
+  }
+  // Create an array of characters from the input string
+  const chars = input.split('');
+
+  // Perform replacements
+  for (const replacement of replacements) {
+    let replacementMapElement = replacementMap.find((e) => e.name === '$$$' + replacement.name + '$$$');
+    if (replacementMapElement) {
+      if (replacementMapElement.recursive) {
+        continue;
+      }
+      chars.splice(replacement.start, replacement.end - replacement.start, replacementMapElement.body);
+    }
+  }
+  // Join the characters back into a string
+  return chars.join('');
+}
+
 async function runPrettier(code: string) {
   const {format} = await import('prettier');
   return format(code, {
